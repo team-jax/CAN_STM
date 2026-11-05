@@ -17,7 +17,7 @@ pio run -t clean
 pio device monitor
 ```
 
-There are no tests (`test/` is empty) and no linter configured. Verification is on hardware, following the staged procedure in section 8 of `Stm32servosepc.md` (scope the PWM, then `cansend can0 007#030384` from a Linux `can-utils` host).
+There are no tests (`test/` is empty) and no linter configured. Verification is on hardware, following the staged procedure in section 8 of `Stm32servosepc.md` (scope the PWM, then `cansend can0 005#030384` from a Linux `can-utils` host).
 
 ## Current state
 
@@ -42,7 +42,7 @@ Constraints from the spec that aren't obvious from the code:
 
 - The callback must never write CCR; it only stores values. Arrays shared with the main loop are `volatile`. No `HAL_Delay` / blocking waits in the main loop.
 - Boot: all 10 channels get `HAL_TIM_PWM_Start` with CCR=0 (no pulse), so servos stay still until the first command.
-- Frame: standard 11-bit ID **7**, data frame, DLC ≥ 3, bytes `[motor_id][angle_x10 H][angle_x10 L]`, angle = value/10 °. Clamp >1800 to 1800 and negative (as int16) to 0. Silently drop anything else (wrong ID/IDE/RTR, DLC<3, `motor_id > 9`). Last write wins; no queue. The RX filter is accept-all into FIFO0; the ID check happens in the callback.
+- Frame: standard 11-bit ID **5**, data frame, DLC ≥ 3, bytes `[motor_id][angle_x10 H][angle_x10 L]`, angle = value/10 °. Clamp >1800 to 1800 and negative (as int16) to 0. Silently drop anything else (wrong ID/IDE/RTR, DLC<3, `motor_id > 9`). Last write wins; no queue. The RX filter is accept-all into FIFO0; the ID check happens in the callback.
 - Angle → pulse: `CCR(µs) = 500 + angle_x10 * 2000 / 1800` (timer tick = 1 µs, so CCR is the pulse width).
 - Clocks: HSE 8 MHz → PLL → 168 MHz; APB1 /4 so timer clock is 84 MHz → PSC 83, ARR 19999 on TIM2/3/4. Do not copy PSC values from the sibling `UART_STM` project (HSI 16 MHz, PSC 15). CAN timing (Prescaler 3, BS1 11, BS2 2) assumes PCLK1 = 42 MHz; changing clocks means recomputing both.
 - `include/stm32f4xx_hal_conf.h` must keep `HSE_VALUE = 8000000U`, **and** `platformio.ini` must keep `board_build.stm32cube.custom_config_header = yes`. Without it the HAL library is compiled against the framework's own `hal_conf.h` (`HSE_VALUE` 25 MHz), so `SystemCoreClock` reads 525 MHz and `HAL_Delay` runs 3.125x slow, even though the project header says 8 MHz (found on hardware, 2026-10-15). The actual PLL registers are unaffected.

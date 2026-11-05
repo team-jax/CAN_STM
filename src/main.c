@@ -35,7 +35,7 @@ typedef struct {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define SERVO_COUNT      10U     // motor_id 0~9
-#define CAN_SERVO_STDID  7U      // ROS -> STM 서보 노드의 CAN 표준 ID
+#define CAN_SERVO_STDID  5U      // ROS -> STM 서보 노드의 CAN 표준 ID
 #define CAN_MIN_DLC      3U      // [motor_id][angle_H][angle_L]
 #define ANGLE_X10_MAX    1800U   // 180.0도
 #define SERVO_MIN_US     500U    // 0.0도의 펄스폭(CCR). 끝값에서 떨리면 줄인다

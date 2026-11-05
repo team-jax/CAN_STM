@@ -48,7 +48,7 @@ pio run -t clean       # 빌드 결과 삭제
 
 | 항목 | 값 |
 |---|---|
-| ID | 표준 11비트, StdId = 7, 데이터 프레임 |
+| ID | 표준 11비트, StdId = 5, 데이터 프레임 |
 | DLC | 3 이상 |
 | 데이터 | `[motor_id][angle_H][angle_L]`, 각도 = `((H<<8)\|L) / 10.0` 도 |
 | 범위 | 0~1800 (0.0°~180.0°), 넘으면 180°로 자름, 음수는 0° |
@@ -79,7 +79,7 @@ PA0, PA6, PA7, PB6, PB9는 DISC1 온보드 부품(USER 버튼, MEMS, 오디오 �
 
 ```bash
 sudo ip link set can0 up type can bitrate 1000000   # 처음 한 번 (1Mbps)
-cansend can0 007#030384
+cansend can0 005#030384
 ```
 
 단계별 검증과 오류 입력 표는 [`Stm32servosepc.md`](Stm32servosepc.md) 8장을 따른다.

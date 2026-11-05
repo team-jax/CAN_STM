@@ -3,7 +3,7 @@
 # cancan
 
 ## Purpose
-Bare-metal STM32F407 firmware (HAL, no RTOS) for the Team JAX single-arm pick & place robot. ROS on a PC sends a CAN frame (standard ID 7) carrying `motor_id` and an angle; the firmware turns it into the PWM pulse of one of 10 hobby servos (TIM2/TIM3/TIM4, 50 Hz). Target board is the STM32F407G-DISC1, built with PlatformIO (`framework = stm32cube`). Project docs are written in Korean. The directory is not a git repository.
+Bare-metal STM32F407 firmware (HAL, no RTOS) for the Team JAX single-arm pick & place robot. ROS on a PC sends a CAN frame (standard ID 5) carrying `motor_id` and an angle; the firmware turns it into the PWM pulse of one of 10 hobby servos (TIM2/TIM3/TIM4, 50 Hz). Target board is the STM32F407G-DISC1, built with PlatformIO (`framework = stm32cube`). Project docs are written in Korean. The directory is not a git repository.
 
 ## Key Files
 
@@ -44,7 +44,7 @@ Not documented on purpose: `.pio/` (build output) and `.omc/` (oh-my-claudecode 
 ### Testing Requirements
 - `~/.platformio/penv/bin/pio run` must succeed. It currently builds clean, including with `-Wall -Wextra`.
 - There are no unit tests. The servo/CAN logic can be checked on the host by extracting the `PTD`, `PD`, `PV`, `PFP` and `0` USER CODE blocks of `src/main.c` and compiling them against a small stub of the HAL types and `__HAL_TIM_SET_COMPARE`. That is how the spec §8 validation table was checked (not stored in the repo).
-- Hardware: boot, clock tree, CAN1 setup and the timers were verified over SWD on a DISC1 (see `CLAUDE.md`). Servo waveforms and CAN frame reception are **not yet verified**; follow the staged procedure in `Stm32servosepc.md` §8 (scope the PWM, then `cansend can0 007#030384` from a Linux `can-utils` host). OpenOCD from `~/.platformio/packages/tool-openocd` can read registers while the board runs.
+- Hardware: boot, clock tree, CAN1 setup and the timers were verified over SWD on a DISC1 (see `CLAUDE.md`). Servo waveforms and CAN frame reception are **not yet verified**; follow the staged procedure in `Stm32servosepc.md` §8 (scope the PWM, then `cansend can0 005#030384` from a Linux `can-utils` host). OpenOCD from `~/.platformio/packages/tool-openocd` can read registers while the board runs.
 
 ### Common Patterns
 - The CAN RX interrupt only validates and stores (`target_x10[]`, `dirty[]`); the main loop applies CCR. No `HAL_Delay` in the main loop.
