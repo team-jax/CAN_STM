@@ -38,8 +38,12 @@ typedef struct {
 #define CAN_SERVO_STDID  5U      // ROS -> STM 서보 노드의 CAN 표준 ID
 #define CAN_MIN_DLC      3U      // [motor_id][angle_H][angle_L]
 #define ANGLE_X10_MAX    1800U   // 180.0도
-#define SERVO_MIN_US     500U    // 0.0도의 펄스폭(CCR). 끝값에서 떨리면 줄인다
-#define SERVO_MAX_US     2500U   // 180.0도의 펄스폭(CCR)
+#define SERVO_MIN_US     500U    // 펄스폭(CCR) 하드 리밋 하한. 서보별 보정값도 이 안에 있어야 한다
+#define SERVO_MAX_US     2500U   // 펄스폭(CCR) 하드 리밋 상한
+
+#define FSR_COUNT        6U      // 압력센서(FSR) 6개 (Stm32pinmap.md 4장)
+#define FSR_PERIOD_MS    100U    // 측정·송신 주기
+#define CAN_FSR_STDID    6U      // STM -> ROS 압력센서 프레임의 CAN 표준 ID [미확정: ROS 쪽과 맞출 것]
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -67,9 +71,26 @@ static const ServoChannel servo[SERVO_COUNT] = {
 	{&htim2, TIM_CHANNEL_2},							// 9 W_PITCH PA1
 };
 
+// 서보별 펄스폭(us): 0.0도일 때 / 180.0도일 때 (index = motor_id).
+// tools/calibrate.py가 아래 두 줄을 실측값으로 갱신한다. 끝값에서 서보가 떨리거나 뜨거우면 안쪽으로 줄인다.
+// 두 값을 서로 바꿔 적으면 그 서보의 회전 방향이 뒤집힌다
+static const uint16_t servo_us_at_0[SERVO_COUNT]   = { 500, 500, 500, 500, 500, 500, 500, 500, 500, 500 };
+static const uint16_t servo_us_at_180[SERVO_COUNT] = { 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500 };
+
 // 콜백(ISR)이 쓰고 main 루프가 읽는다
 static volatile uint16_t target_x10[SERVO_COUNT];
 static volatile uint8_t  dirty[SERVO_COUNT];
+
+// index = 센서 번호 - 1 (Stm32pinmap.md 4장). 핀은 hal_msp.c의 ADC1 아날로그 설정과 일치해야 한다
+static const uint32_t fsr_channel[FSR_COUNT] = {
+	ADC_CHANNEL_11, ADC_CHANNEL_12,	// 센서1 PC1, 센서2 PC2
+	ADC_CHANNEL_14, ADC_CHANNEL_15,	// 센서3 PC4, 센서4 PC5
+	ADC_CHANNEL_2,  ADC_CHANNEL_3,	// 센서5 PA2, 센서6 PA3
+};
+
+// 마지막 측정값, 12비트 원시값 0~4095. main 루프만 쓴다.
+// 읽는 코드가 없어도 최적화로 지워지지 않고 디버거(SWD)에서 실시간으로 보이도록 volatile
+static volatile uint16_t fsr_raw[FSR_COUNT];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -85,15 +106,26 @@ static void MX_TIM4_Init(void);
 static void Servo_Start(void);
 static void Servo_Update(void);
 static void Can_Set(void);
+static void Fsr_Update(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// 각도(x10) -> 펄스폭(us). 타이머 1틱 = 1us 이므로 CCR 값이 곧 펄스폭이다
-static uint32_t angle_to_ccr(uint16_t angle_x10)
+// 각도(x10) -> 펄스폭(us). 타이머 1틱 = 1us 이므로 CCR 값이 곧 펄스폭이다.
+// at_0 > at_180 이어도(방향 반전) 부호 있는 계산이라 그대로 동작한다
+static uint32_t angle_to_ccr(uint32_t id, uint16_t angle_x10)
 {
-	return SERVO_MIN_US + ((uint32_t)angle_x10 * (SERVO_MAX_US - SERVO_MIN_US)) / ANGLE_X10_MAX;
+	int32_t at0   = (int32_t)servo_us_at_0[id];
+	int32_t at180 = (int32_t)servo_us_at_180[id];
+	int32_t us    = at0 + ((int32_t)angle_x10 * (at180 - at0)) / (int32_t)ANGLE_X10_MAX;
+
+	if (us < (int32_t)SERVO_MIN_US) {
+		us = (int32_t)SERVO_MIN_US;
+	} else if (us > (int32_t)SERVO_MAX_US) {
+		us = (int32_t)SERVO_MAX_US;
+	}
+	return (uint32_t)us;
 }
 
 // 부팅 시 1회. 10채널 모두 CCR=0(펄스 없음)으로 시작해 첫 명령 전에는 서보가 움직이지 않는다
@@ -114,7 +146,7 @@ static void Servo_Update(void)
 		if (dirty[i]) {
 			// dirty를 먼저 내리고 target을 읽는다. 사이에 ISR이 새 값을 써도 놓치지 않는다
 			dirty[i] = 0;
-			__HAL_TIM_SET_COMPARE(servo[i].htim, servo[i].channel, angle_to_ccr(target_x10[i]));
+			__HAL_TIM_SET_COMPARE(servo[i].htim, servo[i].channel, angle_to_ccr(i, target_x10[i]));
 		}
 	}
 }
@@ -182,6 +214,72 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	dirty[id] = 1;
 }
 
+// ADC1으로 채널 하나를 한 번 변환한다. 소프트웨어 트리거, 단일 변환, 폴링.
+// 샘플링 144 cycles + 변환 12 cycles, ADC 클럭 21MHz(PCLK2 84MHz / 4) → 약 7.4us.
+// FSR 분압 회로처럼 출력 임피던스가 큰 입력이라 샘플링 시간을 길게 준다
+static HAL_StatusTypeDef Fsr_ReadChannel(uint32_t channel, uint16_t *out)
+{
+	ADC_ChannelConfTypeDef sConfig = {0};
+
+	sConfig.Channel      = channel;
+	sConfig.Rank         = 1;
+	sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;
+	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK ||
+	    HAL_ADC_Start(&hadc1) != HAL_OK ||
+	    HAL_ADC_PollForConversion(&hadc1, 2) != HAL_OK) {
+		return HAL_ERROR;
+	}
+	*out = (uint16_t)HAL_ADC_GetValue(&hadc1);
+	return HAL_OK;
+}
+
+// 압력센서 프레임 (STM -> ROS): StdId CAN_FSR_STDID, DLC 6, byte[k] = 센서 k+1 값 0~255.
+// 0~255는 12비트 원시값을 4비트 내린 값이다 (0~4095 → 0~255)
+static void Fsr_Send(void)
+{
+	CAN_TxHeaderTypeDef txHeader;
+	uint8_t  txData[FSR_COUNT];
+	uint32_t txMailbox;
+
+	// 빈 메일박스가 없으면 이번 주기는 건너뛴다. 기다리지 않는다
+	if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) == 0U) {
+		return;
+	}
+
+	txHeader.StdId              = CAN_FSR_STDID;
+	txHeader.ExtId              = 0;
+	txHeader.IDE                = CAN_ID_STD;
+	txHeader.RTR                = CAN_RTR_DATA;
+	txHeader.DLC                = FSR_COUNT;
+	txHeader.TransmitGlobalTime = DISABLE;
+	for (uint32_t i = 0; i < FSR_COUNT; i++) {
+		txData[i] = (uint8_t)(fsr_raw[i] >> 4);
+	}
+	// 자동 재전송이 꺼져 있어(AutoRetransmission DISABLE) 실패한 프레임은 버려지고 다음 주기에 새로 보낸다
+	(void)HAL_CAN_AddTxMessage(&hcan1, &txHeader, txData, &txMailbox);
+}
+
+// main 루프에서 호출. FSR_PERIOD_MS마다 6채널을 읽고 CAN으로 보낸다.
+// HAL_Delay 대신 틱을 비교하므로 주기 사이에는 바로 반환한다. 읽는 데는 6채널 합쳐 약 50us
+static void Fsr_Update(void)
+{
+	static uint32_t last_ms;
+	uint32_t now = HAL_GetTick();
+
+	if ((uint32_t)(now - last_ms) < FSR_PERIOD_MS) {
+		return;
+	}
+	last_ms = now;
+
+	for (uint32_t i = 0; i < FSR_COUNT; i++) {
+		uint16_t v;
+		if (Fsr_ReadChannel(fsr_channel[i], &v) == HAL_OK) {
+			fsr_raw[i] = v;		// 실패하면 이전 값을 유지한다
+		}
+	}
+	Fsr_Send();
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -234,6 +332,7 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     Servo_Update();
+    Fsr_Update();
   }
   /* USER CODE END 3 */
 }
@@ -324,7 +423,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_11;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_144CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();

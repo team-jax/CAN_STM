@@ -27,6 +27,7 @@ Bare-metal STM32F407 firmware (HAL, no RTOS) for the Team JAX single-arm pick & 
 | `lib/` | PlatformIO private libs; only an unused vendored USB Host stack (see `lib/AGENTS.md`) |
 | `Drivers/` | Vendored ST CMSIS/HAL copy that the build does **not** use (see `Drivers/AGENTS.md`) |
 | `test/` | Empty PlatformIO test dir (see `test/AGENTS.md`) |
+| `tools/` | Host-side helper scripts; `calibrate.py` measures per-servo pulse limits over SWD (see `tools/AGENTS.md`) |
 | `.vscode/` | Auto-generated IDE/debug config (see `.vscode/AGENTS.md`) |
 
 Not documented on purpose: `.pio/` (build output) and `.omc/` (oh-my-claudecode tool state). The inner folders of `Drivers/` and `lib/Middlewares/` are third-party vendored code, covered by their parent file.
